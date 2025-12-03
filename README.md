@@ -55,6 +55,13 @@ python train_dsrl.py --config-path=cfg/gym --config-name=dsrl_hopper.yaml
 ```
 where `dsrl_hopper.yaml` is set to the config file for the desired task.
 
+## Eval DSRL
+```
+ python eval_dsrl.py --config-path=cfg/robomimic --config-name=dsrl_can.yaml \
+    +model_path=logs/robomimic-dsrl/robomimic_can_dsrl_2025-11-28_11-19-35_1/2025-11-28_11-19-35_1/checkpoint/ft_policy_320000_steps.zip \
+    +render=true +n_episodes=5
+```
+
 ## Applying DSRL to new settings
 It is straightforward to apply DSRL to new settings. Doing this typically requires:
 - Access to a diffusion or flow policy with the ability to control the noise initializing the denoising process. Note that if using a diffusion policy it must be sampled from with DDIM sampling.
