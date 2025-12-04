@@ -60,6 +60,10 @@ where `dsrl_hopper.yaml` is set to the config file for the desired task.
  python eval_dsrl.py --config-path=cfg/robomimic --config-name=dsrl_can.yaml \
     +model_path=logs/robomimic-dsrl/robomimic_can_dsrl_2025-11-28_11-19-35_1/2025-11-28_11-19-35_1/checkpoint/ft_policy_320000_steps.zip \
     +render=true +n_episodes=5
+
+    python eval_dsrl.py --config-path=cfg/robomimic --config-name=dsrl_can.yaml \
+    +model_path=logs/robomimic-dsrl/robomimic_can_dsrl_2025-11-28_11-19-35_1/2025-11-28_11-19-35_1/checkpoint/ft_policy_40000_steps.zip \
+    +render=true +n_episodes=5
 ```
 
 ## Applying DSRL to new settings

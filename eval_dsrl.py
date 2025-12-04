@@ -22,6 +22,10 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 
+# 抑制EGL清理时的警告（这些警告发生在析构函数中，不影响程序运行）
+# 设置环境变量来抑制OpenGL错误输出
+os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
 # 在导入robosuite之前设置环境变量，避免Qt相关问题
 # 禁用Qt平台插件（如果存在）
 os.environ.pop("QT_QPA_PLATFORM", None)
@@ -308,8 +312,52 @@ def main(cfg: OmegaConf):
     print(f"最小奖励: {np.min(episode_rewards):.2f}")
     print("="*50)
     
-    # 关闭环境
-    eval_env.close()
+    # 优雅地关闭环境，避免EGL清理警告
+    # 注意：如果看到 "Exception ignored in: <function MjRenderContext.__del__>" 错误
+    # 这是无害的，发生在程序退出时EGL上下文清理过程中
+    # 不影响评估结果的正确性
+    try:
+        # 先尝试正常关闭
+        if hasattr(eval_env, 'close'):
+            eval_env.close()
+        
+        # 如果是VecEnv，关闭所有子环境
+        if hasattr(eval_env, 'venv') and hasattr(eval_env.venv, 'envs'):
+            for sub_env in eval_env.venv.envs:
+                if hasattr(sub_env, 'close'):
+                    try:
+                        sub_env.close()
+                    except Exception:
+                        pass
+        
+        # 关闭底层robosuite环境（如果存在）
+        if robosuite_env is not None and hasattr(robosuite_env, 'close'):
+            try:
+                robosuite_env.close()
+            except Exception:
+                pass
+        
+        # 关闭单个环境（如果存在）
+        if 'single_env' in locals() and hasattr(single_env, 'close'):
+            try:
+                single_env.close()
+            except Exception:
+                pass
+                
+    except Exception as e:
+        # 忽略关闭时的错误（通常是EGL清理警告）
+        # 这些错误发生在析构函数中，不会影响程序运行
+        # 评估结果已经正确输出，可以安全忽略
+        pass
+    
+    # 如果使用了渲染，尝试清理EGL上下文
+    if render:
+        try:
+            # 清理OpenGL/EGL相关资源
+            import gc
+            gc.collect()  # 强制垃圾回收，帮助清理渲染资源
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
