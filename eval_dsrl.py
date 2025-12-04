@@ -13,6 +13,10 @@
     python eval_dsrl.py --config-path=cfg/robomimic --config-name=dsrl_can.yaml \
         +model_path=xxx +render=true +n_episodes=20
     
+    # 保存评估视频
+    python eval_dsrl.py --config-path=cfg/robomimic --config-name=dsrl_can.yaml \
+        +model_path=xxx +save_video=true +n_episodes=5
+    
     # 使用随机策略评估
     python eval_dsrl.py --config-path=cfg/robomimic --config-name=dsrl_can.yaml \
         +deterministic=false
@@ -37,6 +41,8 @@ import numpy as np
 import hydra
 from omegaconf import OmegaConf
 import sys
+import imageio
+from datetime import datetime
 sys.path.append('./dppo')
 import gym, d4rl
 import d4rl.gym_mujoco
@@ -74,6 +80,10 @@ def main(cfg: OmegaConf):
     else:
         deterministic = str(deterministic_str).lower() == 'true' if isinstance(deterministic_str, str) else bool(deterministic_str)
     
+    # 视频保存相关参数
+    save_video = cfg.get('save_video', False) or (os.environ.get('SAVE_VIDEO', 'false').lower() == 'true')
+    video_dir = cfg.get('video_dir', None) or os.environ.get('VIDEO_DIR', None)
+    
     # 如果没有指定模型路径，尝试自动查找最新的checkpoint
     if model_path is None:
         log_dir = cfg.logdir
@@ -100,6 +110,20 @@ def main(cfg: OmegaConf):
     print(f"渲染模式: {render}")
     print(f"评估回合数: {n_episodes}")
     print(f"确定性策略: {deterministic}")
+    print(f"保存视频: {save_video}")
+    
+    # 设置视频保存目录
+    if save_video:
+        if video_dir is None:
+            # 默认保存在模型目录下的videos文件夹
+            # model_path通常是: logs/.../checkpoint/ft_policy_xxx.zip
+            # 我们想要: logs/.../videos/
+            model_dir = os.path.dirname(model_path)  # checkpoint目录
+            if 'checkpoint' in model_dir:
+                model_dir = os.path.dirname(model_dir)  # 上一级目录
+            video_dir = os.path.join(model_dir, 'videos')
+        os.makedirs(video_dir, exist_ok=True)
+        print(f"视频保存目录: {video_dir}")
     
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -128,10 +152,10 @@ def main(cfg: OmegaConf):
                 env_meta = json.load(f)
             env_meta["reward_shaping"] = False
             
-            # 如果启用渲染，修改env_meta中的has_renderer设置
-            if render:
-                env_meta["env_kwargs"]["has_renderer"] = True
-                env_meta["env_kwargs"]["has_offscreen_renderer"] = False
+            # 如果启用渲染或保存视频，修改env_meta中的has_renderer设置
+            if render or save_video:
+                env_meta["env_kwargs"]["has_renderer"] = render  # GUI渲染
+                env_meta["env_kwargs"]["has_offscreen_renderer"] = save_video  # 离屏渲染用于视频录制
                 # 设置MuJoCo使用glfw进行GUI渲染（需要X11显示）
                 # 如果没有显示，可以使用osmesa进行软件渲染
                 if "DISPLAY" in os.environ and os.environ["DISPLAY"]:
@@ -155,7 +179,7 @@ def main(cfg: OmegaConf):
             env = EnvUtils.create_env_from_metadata(
                 env_meta=env_meta,
                 render=render,  # GUI渲染
-                render_offscreen=False,  # 不使用离屏渲染（GUI模式下）
+                render_offscreen=save_video,  # 离屏渲染用于视频录制
                 use_image_obs=False,
             )
             env.env.hard_reset = False
@@ -224,6 +248,21 @@ def main(cfg: OmegaConf):
         
         print(f"\n回合 {episode + 1}/{n_episodes}")
         
+        # 初始化视频录制
+        video_frames = []
+        video_writer = None
+        if save_video:
+            # 创建视频文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            video_filename = f"episode_{episode+1:03d}_reward_{episode_reward:.2f}_{timestamp}.mp4"
+            video_path = os.path.join(video_dir, video_filename)
+            try:
+                video_writer = imageio.get_writer(video_path, fps=30)
+                print(f"开始录制视频: {video_path}")
+            except Exception as e:
+                print(f"警告: 无法创建视频文件 {video_path}: {e}")
+                video_writer = None
+        
         step_count = 0
         while not done and step_count < MAX_STEPS:
             # 预测动作
@@ -245,6 +284,54 @@ def main(cfg: OmegaConf):
             
             episode_reward += reward
             episode_length += cfg.act_steps
+            
+            # 录制视频帧
+            if save_video and video_writer is not None:
+                try:
+                    # 获取渲染帧（离屏渲染）
+                    if cfg.env_name in ['lift', 'can', 'square', 'transport']:
+                        # 对于robomimic环境，使用离屏渲染
+                        if robosuite_env is not None:
+                            # 使用robosuite的render方法获取RGB图像
+                            frame = robosuite_env.sim.render(
+                                camera_name="agentview",
+                                width=512,
+                                height=512,
+                                depth=False
+                            )
+                            # robosuite返回的是翻转的图像，需要翻转回来
+                            if frame is not None:
+                                frame = np.flipud(frame)
+                                video_writer.append_data(frame)
+                        else:
+                            # 尝试通过wrapper获取
+                            wrapped_env = single_env
+                            while hasattr(wrapped_env, 'env'):
+                                wrapped_env = wrapped_env.env
+                                if hasattr(wrapped_env, 'sim'):
+                                    try:
+                                        frame = wrapped_env.sim.render(
+                                            camera_name="agentview",
+                                            width=512,
+                                            height=512,
+                                            depth=False
+                                        )
+                                        if frame is not None:
+                                            frame = np.flipud(frame)
+                                            video_writer.append_data(frame)
+                                        break
+                                    except:
+                                        pass
+                    else:
+                        # 对于其他环境，使用标准的render方法
+                        if hasattr(eval_env, 'render'):
+                            frame = eval_env.render(mode='rgb_array')
+                            if frame is not None:
+                                video_writer.append_data(frame)
+                except Exception as e:
+                    # 如果录制失败，打印警告但继续执行
+                    if step_count % 50 == 0:  # 每50步打印一次，避免刷屏
+                        print(f"视频录制警告: {e}")
             
             # 渲染 - 对于robomimic环境，需要调用底层robosuite环境的render方法
             if render:
@@ -275,6 +362,22 @@ def main(cfg: OmegaConf):
             # 检查episode是否结束
             if done:
                 break
+        
+        # 关闭视频录制
+        if save_video and video_writer is not None:
+            try:
+                video_writer.close()
+                # 更新视频文件名（包含实际奖励）
+                old_video_path = video_path
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_video_filename = f"episode_{episode+1:03d}_reward_{episode_reward:.2f}_{timestamp}.mp4"
+                new_video_path = os.path.join(video_dir, new_video_filename)
+                if old_video_path != new_video_path and os.path.exists(old_video_path):
+                    os.rename(old_video_path, new_video_path)
+                    video_path = new_video_path
+                print(f"视频已保存: {video_path}")
+            except Exception as e:
+                print(f"警告: 关闭视频文件时出错: {e}")
         
         # 判断成功标准：
         # 训练时使用的是：每一步reward > -reward_offset（即reward > -1）时标记为成功
